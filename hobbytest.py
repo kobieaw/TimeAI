@@ -39,7 +39,7 @@ def get_calendar_service():
                     "auth_uri": "https://accounts.google.com/o/oauth2/auth",
                     "token_uri": "https://oauth2.googleapis.com/token",
                     "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
-                    "client_secret": "YOUR_CLIENT_SECRET",
+                    "client_secret": "",
                     "redirect_uris": [
                         "urn:ietf:wg:oauth:2.0:oob",
                         "http://localhost"
@@ -56,57 +56,35 @@ def get_calendar_service():
     return service
 
 def find_next_available_time(service, duration_hours):
-    """
-    Function to find the next available time slot in the calendar
-    Args:
-        service: Google Calendar API service instance
-        duration_hours: Desired duration for the hobby event in hours
-    Returns:
-        start_time, end_time: Tuple containing the start and end times for the event
-    """
     # Assume the start time is the next hour from now
     now = datetime.datetime.now(tz.tzlocal())
     start_time = now.replace(minute=0, second=0, microsecond=0) + datetime.timedelta(hours=1)
     
-    # Calculate the end time based on the given duration
+    # Calculate the end time based on the duration
     end_time = start_time + datetime.timedelta(hours=duration_hours)
     
     # For simplicity, no check is made against the user's actual calendar events
     return start_time, end_time
 
 def split_hobby_duration(duration_hours):
-    """
-    Function to split a hobby duration into acceptable chunks if it exceeds a maximum duration
-    Args:
-        duration_hours: Total duration of the hobby in hours
-    Returns:
-        List of durations split into acceptable chunks
-    """
     # Maximum duration for a single chunk
     max_duration = 2
 
     durations = []
     
-    # Split the total duration into 2-hour chunks
+    # Split duration into 2-hour chunks
     while duration_hours > max_duration:
         durations.append(max_duration)
         duration_hours -= max_duration
     
-    # Add the remaining time, if any
+    # Add the remainder, if any
     if duration_hours > 0:
         durations.append(duration_hours)
     
     return durations
 
 def add_hobby_event(service, hobby, duration_hours):
-    """
-    Function to add a hobby event to the Google Calendar
-    Args:
-        service: Google Calendar API service instance
-        hobby: Name of the hobby to add to the calendar
-        duration_hours: Duration in hours for the hobby
-    """
-    # Convert current time to local timezone
+    # Convert to local timezone
     local_zone = tz.tzlocal()
     now_local = datetime.datetime.now(local_zone)
 
@@ -116,19 +94,16 @@ def add_hobby_event(service, hobby, duration_hours):
     else:
         durations = [duration_hours]
 
-    # Loop through each split duration to create events
     for duration in durations:
-        # Find the next available time slot for the given duration
         start_time, end_time = find_next_available_time(service, duration)
         if not start_time or not end_time:
             print("Could not find an available time slot.")
             return
 
-        # Define the event details
         event = {
             'summary': hobby,
             'description': f'Time allocated for {hobby}',
-             'start': {
+            'start': {
                 'dateTime': start_time.isoformat(),
                 'timeZone': 'America/New_York',  # Example: Use a valid IANA Time Zone ID
             },
@@ -138,18 +113,88 @@ def add_hobby_event(service, hobby, duration_hours):
             },
         }
 
-        # Try adding the event to the user's primary calendar
         try:
             event = service.events().insert(calendarId='primary', body=event).execute()
             print(f"Event created: {event.get('htmlLink')}")
         except Exception as e:
             print(f"An error occurred: {e}")
 
+# Additional Function 1: Check for Conflicting Events
+def is_time_slot_available(service, start_time, end_time):
+    events_result = service.events().list(
+        calendarId='primary',
+        timeMin=start_time.isoformat(),
+        timeMax=end_time.isoformat(),
+        singleEvents=True,
+        orderBy='startTime'
+    ).execute()
+    events = events_result.get('items', [])
+    return len(events) == 0
+
+# Additional Function 2: Find the Next Available Time with No Conflicts
+def find_next_available_time_no_conflict(service, duration_hours):
+    now = datetime.datetime.now(tz.tzlocal())
+    start_time = now.replace(minute=0, second=0, microsecond=0) + datetime.timedelta(hours=1)
+    end_time = start_time + datetime.timedelta(hours=duration_hours)
+
+    while not is_time_slot_available(service, start_time, end_time):
+        start_time += datetime.timedelta(hours=1)
+        end_time = start_time + datetime.timedelta(hours=duration_hours)
+    
+    return start_time, end_time
+
+# Additional Function 3: Set a Recurring Hobby Event
+def add_recurring_hobby_event(service, hobby, duration_hours, recurrence_interval):
+    start_time, end_time = find_next_available_time_no_conflict(service, duration_hours)
+
+    event = {
+        'summary': hobby,
+        'description': f'Time allocated for {hobby}',
+        'start': {
+            'dateTime': start_time.isoformat(),
+            'timeZone': 'America/New_York',
+        },
+        'end': {
+            'dateTime': end_time.isoformat(),
+            'timeZone': 'America/New_York',
+        },
+        'recurrence': [
+            f'RRULE:FREQ=WEEKLY;INTERVAL={recurrence_interval}'
+        ],
+    }
+
+    try:
+        event = service.events().insert(calendarId='primary', body=event).execute()
+        print(f"Recurring event created: {event.get('htmlLink')}")
+    except Exception as e:
+        print(f"An error occurred: {e}")
+
+# Additional Function 4: Delete All Events by Name
+def delete_all_events_by_name(service, event_name):
+    try:
+        now = datetime.datetime.utcnow().isoformat() + 'Z'  # 'Z' indicates UTC time
+        events_result = service.events().list(
+            calendarId='primary',
+            timeMin=now,
+            singleEvents=True,
+            orderBy='startTime'
+        ).execute()
+        events = events_result.get('items', [])
+
+        deleted = False
+        for event in events:
+            if event['summary'].lower() == event_name.lower():
+                service.events().delete(calendarId='primary', eventId=event['id']).execute()
+                print(f"Event '{event_name}' deleted successfully.")
+                deleted = True
+        if not deleted:
+            print(f"No event found with the name '{event_name}'.")
+    except Exception as e:
+        print(f"An error occurred: {e}")
+
 if __name__ == '__main__':
-    # Prompt user for hobby name and duration
     hobby = input("Enter your hobby: ")
     try:
-        # Ensure the input duration is valid
         duration_hours = float(input("Enter the duration in hours for your hobby: "))
         if duration_hours <= 0:
             raise ValueError("Duration must be a positive number.")
@@ -157,7 +202,22 @@ if __name__ == '__main__':
         print(f"Invalid input: {e}")
         exit(1)
 
-    # Get Google Calendar service instance
+    recurrence = input("Would you like this to be a recurring event? (yes/no): ").strip().lower()
     service = get_calendar_service()
-    # Add the hobby event to the calendar
-    add_hobby_event(service, hobby, duration_hours)
+
+    if recurrence == 'yes':
+        try:
+            recurrence_interval = int(input("Enter the recurrence interval in weeks: "))
+            if recurrence_interval <= 0:
+                raise ValueError("Recurrence interval must be a positive number.")
+            add_recurring_hobby_event(service, hobby, duration_hours, recurrence_interval)
+        except ValueError as e:
+            print(f"Invalid input: {e}")
+            exit(1)
+    else:
+        add_hobby_event(service, hobby, duration_hours)
+    
+    delete = input("Would you like to delete an event? (yes/no): ").strip().lower()
+    if delete == 'yes':
+        event_name = input("Enter the event name to delete: ")
+        delete_all_events_by_name(service, event_name)
